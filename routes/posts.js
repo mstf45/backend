@@ -83,7 +83,10 @@ const saveBase64Media = (base64String) => {
     fs.writeFileSync(filepath, buffer);
     console.log('File written successfully');
 
-    return filename;
+    return {
+      type: type,
+      path: `/uploads/${filename}`
+    };
   } catch (error) {
     console.error('Error saving base64 media:', error);
     console.error('Error stack:', error.stack);
@@ -113,18 +116,14 @@ router.post('/', authenticate, [
     let mediaType = 'text';
     let mediaUrl = null;
 
-    // Handle base64 media
+    // Handle base64 media - store directly in database
     if (media) {
-      const filename = saveBase64Media(media);
-      console.log('Filename:', filename);
-      if (filename) {
-        mediaUrl = `/uploads/${filename}`;
-        // Determine media type from base64 string
-        if (media.startsWith('data:image/')) {
-          mediaType = 'image';
-        } else if (media.startsWith('data:video/')) {
-          mediaType = 'video';
-        }
+      mediaUrl = media;
+      // Determine media type from base64 string
+      if (media.startsWith('data:image/')) {
+        mediaType = 'image';
+      } else if (media.startsWith('data:video/')) {
+        mediaType = 'video';
       }
     }
 
@@ -170,8 +169,8 @@ router.get('/', authenticate, async (req, res) => {
         postObj.author.avatar = getFullUrl(req, postObj.author.avatar);
       }
       
-      // Set full URL for mediaUrl if exists
-      if (postObj.mediaUrl) {
+      // Set full URL for mediaUrl if it's a file path
+      if (postObj.mediaUrl && postObj.mediaUrl.startsWith('/uploads/')) {
         postObj.mediaUrl = getFullUrl(req, postObj.mediaUrl);
       }
       
@@ -277,25 +276,58 @@ router.get('/:id', authenticate, async (req, res) => {
 // Update post
 router.put('/:id', authenticate, async (req, res) => {
   try {
+    console.log('=== PUT /posts/:id called ===');
+    console.log('Post ID:', req.params.id);
+    console.log('User ID:', req.user._id);
+    
     const post = await Post.findById(req.params.id);
 
     if (!post) {
+      console.log('Post not found');
       return res.status(404).json({ message: 'Post not found' });
     }
 
+    console.log('Post found, author:', post.author);
+    console.log('Post author type:', typeof post.author);
+    console.log('User ID type:', typeof req.user._id);
+    
     if (post.author.toString() !== req.user._id.toString()) {
+      console.log('Authorization failed');
       return res.status(403).json({ message: 'Not authorized to update this post' });
     }
 
-    const { content } = req.body;
+    const { content, media } = req.body;
+    
+    console.log('Update post request - content:', content);
+    console.log('Update post request - media exists:', !!media);
+    console.log('Update post request - media length:', media ? media.length : 0);
+    
     if (content) post.content = content;
+    
+    // Handle media update - store directly in database
+    if (media) {
+      console.log('Processing media update...');
+      mediaUrl = media;
+      // Determine media type from base64 string
+      if (media.startsWith('data:image/')) {
+        mediaType = 'image';
+      } else if (media.startsWith('data:video/')) {
+        mediaType = 'video';
+      }
+      post.mediaType = mediaType;
+      post.mediaUrl = mediaUrl;
+      console.log('Post media updated - type:', post.mediaType, 'url length:', post.mediaUrl.length);
+    }
 
     post.updatedAt = Date.now();
     await post.save();
     await post.populate('author', 'username avatar profession');
 
+    console.log('Post saved successfully');
     res.json({ message: 'Post updated successfully', post });
   } catch (error) {
+    console.error('Error in PUT /posts/:id:', error);
+    console.error('Error stack:', error.stack);
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 });

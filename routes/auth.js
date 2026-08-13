@@ -126,7 +126,39 @@ router.get('/me', authenticate, async (req, res) => {
       user.avatar = `${req.protocol}://${req.get('host')}${user.avatar}`;
     }
     
-    res.json({ user });
+    // Ensure socialLinks has all fields with null values if not set
+    const userObj = user.toObject();
+    if (!userObj.socialLinks) {
+      userObj.socialLinks = {
+        instagram: null,
+        twitter: null,
+        facebook: null,
+        linkedin: null,
+        youtube: null,
+        github: null,
+        medium: null
+      };
+    } else {
+      const defaultSocialLinks = {
+        instagram: null,
+        twitter: null,
+        facebook: null,
+        linkedin: null,
+        youtube: null,
+        github: null,
+        medium: null
+      };
+      // Replace placeholder values with null
+      const placeholderValues = ['instagram_url', 'twitter_url', 'facebook_url', 'linkedin_url', 'youtube_url', 'github_url', 'medium_url'];
+      Object.keys(userObj.socialLinks).forEach(key => {
+        if (placeholderValues.includes(userObj.socialLinks[key])) {
+          userObj.socialLinks[key] = null;
+        }
+      });
+      userObj.socialLinks = { ...defaultSocialLinks, ...userObj.socialLinks };
+    }
+    
+    res.json({ user: userObj });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
   }
@@ -156,11 +188,13 @@ router.put('/profile', authenticate, async (req, res) => {
     
     // Update phone if provided
     if (phone) {
-      user.phone = phone;
-      // Reset phone verification when phone changes
-      user.isPhoneVerified = false;
-      user.phoneVerificationCode = null;
-      user.phoneVerificationCodeExpires = null;
+      // Only reset phone verification if phone number actually changes
+      if (phone !== user.phone) {
+        user.phone = phone;
+        user.isPhoneVerified = false;
+        user.phoneVerificationCode = null;
+        user.phoneVerificationCodeExpires = null;
+      }
     }
 
     user.updatedAt = Date.now();
@@ -172,6 +206,37 @@ router.put('/profile', authenticate, async (req, res) => {
       if (userObj.avatar.startsWith('/uploads/')) {
         userObj.avatar = `${req.protocol}://${req.get('host')}${userObj.avatar}`;
       }
+    }
+
+    // Ensure socialLinks has all fields with null values if not set
+    if (!userObj.socialLinks) {
+      userObj.socialLinks = {
+        instagram: null,
+        twitter: null,
+        facebook: null,
+        linkedin: null,
+        youtube: null,
+        github: null,
+        medium: null
+      };
+    } else {
+      const defaultSocialLinks = {
+        instagram: null,
+        twitter: null,
+        facebook: null,
+        linkedin: null,
+        youtube: null,
+        github: null,
+        medium: null
+      };
+      // Replace placeholder values with null
+      const placeholderValues = ['instagram_url', 'twitter_url', 'facebook_url', 'linkedin_url', 'youtube_url', 'github_url', 'medium_url'];
+      Object.keys(userObj.socialLinks).forEach(key => {
+        if (placeholderValues.includes(userObj.socialLinks[key])) {
+          userObj.socialLinks[key] = null;
+        }
+      });
+      userObj.socialLinks = { ...defaultSocialLinks, ...userObj.socialLinks };
     }
 
     res.json({ message: 'Profile updated successfully', user: userObj });
