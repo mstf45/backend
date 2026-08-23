@@ -5,6 +5,181 @@ import { authenticate } from '../middleware/auth.js';
 
 const router = express.Router();
 
+// Block a user
+router.post('/:id/block', authenticate, async (req, res) => {
+  try {
+    const userToBlockId = req.params.id;
+    if (userToBlockId === req.user._id.toString()) {
+      return res.status(400).json({ message: 'You cannot block yourself' });
+    }
+
+    const user = await User.findById(req.user._id);
+    const targetUser = await User.findById(userToBlockId);
+
+    if (!targetUser) {
+      return res.status(404).json({ message: 'User to block not found' });
+    }
+
+    // Initialize blockedUsers if it doesn't exist
+    if (!user.blockedUsers) {
+      user.blockedUsers = [];
+    }
+
+    // Add to blockedUsers if not already there
+    if (!user.blockedUsers.includes(userToBlockId)) {
+      user.blockedUsers.push(userToBlockId);
+    }
+
+    // Remove from following/followers for both users
+    user.following = user.following.filter(id => id.toString() !== userToBlockId);
+    user.followers = user.followers.filter(id => id.toString() !== userToBlockId);
+    user.followingCount = user.following.length;
+    user.followerCount = user.followers.length;
+    await user.save();
+
+    targetUser.following = targetUser.following.filter(id => id.toString() !== req.user._id.toString());
+    targetUser.followers = targetUser.followers.filter(id => id.toString() !== req.user._id.toString());
+    targetUser.followingCount = targetUser.following.length;
+    targetUser.followerCount = targetUser.followers.length;
+    await targetUser.save();
+
+    res.json({ message: 'User blocked successfully', blockedUsers: user.blockedUsers });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// Unblock a user
+router.delete('/:id/block', authenticate, async (req, res) => {
+  try {
+    const userToUnblockId = req.params.id;
+    const user = await User.findById(req.user._id);
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    if (user.blockedUsers) {
+      user.blockedUsers = user.blockedUsers.filter(id => id.toString() !== userToUnblockId);
+      await user.save();
+    }
+
+    res.json({ message: 'User unblocked successfully', blockedUsers: user.blockedUsers });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// Get list of blocked users
+router.get('/me/blocked', authenticate, async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id)
+      .populate('blockedUsers', 'username avatar profession company bio');
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    const blockedList = (user.blockedUsers || []).map(u => {
+      const uObj = u.toObject();
+      if (!uObj.avatar) {
+        uObj.avatar = `${req.protocol}://${req.get('host')}/uploads/default_avatar.png`;
+      } else if (uObj.avatar.startsWith('/uploads/')) {
+        uObj.avatar = `${req.protocol}://${req.get('host')}${uObj.avatar}`;
+      }
+      return uObj;
+    });
+
+    res.json({ blockedUsers: blockedList });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// Get users the current user is following
+router.get('/me/following', authenticate, async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id)
+      .populate('following', 'username avatar profession company bio');
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    const followingList = user.following.map(u => {
+      const uObj = u.toObject();
+      if (!uObj.avatar) {
+        uObj.avatar = `${req.protocol}://${req.get('host')}/uploads/default_avatar.png`;
+      } else if (uObj.avatar.startsWith('/uploads/')) {
+        uObj.avatar = `${req.protocol}://${req.get('host')}${uObj.avatar}`;
+      }
+      return uObj;
+    });
+
+    res.json({ following: followingList });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// Get matching profiles for the current user
+router.get('/me/matches', authenticate, async (req, res) => {
+  try {
+    const currentUser = await User.findById(req.user._id);
+    if (!currentUser) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    const excludeIds = [currentUser._id, ...currentUser.following];
+
+    let query = {
+      _id: { $nin: excludeIds }
+    };
+
+    // If current user has a profession, search for users with similar profession
+    if (currentUser.profession) {
+      const firstWord = currentUser.profession.split(' ')[0].replace(/[^a-zA-Z0-9ğüşöçıİĞÜŞÖÇ]/g, '');
+      if (firstWord.length > 0) {
+        const professionRegex = new RegExp(firstWord, 'i');
+        query.$or = [
+          { profession: { $regex: professionRegex } }
+        ];
+      }
+    }
+
+    let matches = await User.find(query)
+      .select('username avatar profession company bio followers followerCount')
+      .limit(20);
+
+    // If we didn't find enough matches, backfill with popular users who are not followed
+    if (matches.length < 5) {
+      const additionalUsers = await User.find({
+        _id: { $nin: [...excludeIds, ...matches.map(m => m._id)] }
+      })
+      .select('username avatar profession company bio followers followerCount')
+      .sort({ followerCount: -1 })
+      .limit(10);
+      
+      matches = [...matches, ...additionalUsers];
+    }
+
+    const formattedMatches = matches.map(u => {
+      const uObj = u.toObject();
+      if (!uObj.avatar) {
+        uObj.avatar = `${req.protocol}://${req.get('host')}/uploads/default_avatar.png`;
+      } else if (uObj.avatar.startsWith('/uploads/')) {
+        uObj.avatar = `${req.protocol}://${req.get('host')}${uObj.avatar}`;
+      }
+      uObj.isFollowing = false;
+      return uObj;
+    });
+
+    res.json({ matches: formattedMatches });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
 // Get user profile by ID
 router.get('/:id', authenticate, async (req, res) => {
   try {
@@ -27,12 +202,36 @@ router.get('/:id', authenticate, async (req, res) => {
       userObj.avatar = `${req.protocol}://${req.get('host')}${userObj.avatar}`;
     }
 
-    res.json({ 
-      user: { 
-        ...userObj, 
-        postsCount 
-      } 
-    });
+    const isFollowing = user.followers.map(f => f.toString()).includes(req.user._id.toString());
+    const isMe = user._id.toString() === req.user._id.toString();
+
+    let responseUser = {
+      ...userObj,
+      postsCount,
+      isFollowing
+    };
+
+    if (user.isPrivate && !isMe && !isFollowing) {
+      responseUser = {
+        _id: user._id,
+        id: user._id,
+        username: user.username,
+        avatar: userObj.avatar,
+        userType: user.userType,
+        profession: user.profession,
+        followerCount: user.followerCount,
+        followingCount: user.followingCount,
+        isPrivate: true,
+        isFollowing: false,
+        bio: 'Bu hesap gizli',
+        experience: [],
+        socialLinks: {},
+        companyDescription: null,
+        postsCount: 0
+      };
+    }
+
+    res.json({ user: responseUser });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
   }
@@ -112,6 +311,36 @@ router.delete('/:id/follow', authenticate, async (req, res) => {
   }
 });
 
+// Get user's liked posts
+router.get('/:id/liked', authenticate, async (req, res) => {
+  try {
+    if (req.params.id !== req.user._id.toString()) {
+      return res.status(403).json({ message: 'Not authorized to view liked posts' });
+    }
+
+    const posts = await Post.find({ likes: req.user._id })
+      .populate('author', 'username avatar profession')
+      .sort({ createdAt: -1 });
+
+    // Format post author avatars
+    const formattedPosts = posts.map(post => {
+      const postObj = post.toObject();
+      if (postObj.author) {
+        if (!postObj.author.avatar) {
+          postObj.author.avatar = `${req.protocol}://${req.get('host')}/uploads/default_avatar.png`;
+        } else if (postObj.author.avatar.startsWith('/uploads/')) {
+          postObj.author.avatar = `${req.protocol}://${req.get('host')}${postObj.author.avatar}`;
+        }
+      }
+      return postObj;
+    });
+
+    res.json({ posts: formattedPosts });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
 // Get user's saved posts
 router.get('/:id/saved', authenticate, async (req, res) => {
   try {
@@ -123,7 +352,19 @@ router.get('/:id/saved', authenticate, async (req, res) => {
       .populate('author', 'username avatar profession')
       .sort({ createdAt: -1 });
 
-    res.json({ posts });
+    const formattedPosts = posts.map(post => {
+      const postObj = post.toObject();
+      if (postObj.author) {
+        if (!postObj.author.avatar) {
+          postObj.author.avatar = `${req.protocol}://${req.get('host')}/uploads/default_avatar.png`;
+        } else if (postObj.author.avatar.startsWith('/uploads/')) {
+          postObj.author.avatar = `${req.protocol}://${req.get('host')}${postObj.author.avatar}`;
+        }
+      }
+      return postObj;
+    });
+
+    res.json({ posts: formattedPosts });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
   }

@@ -4,9 +4,9 @@ const ratingSchema = new mongoose.Schema({
   job: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Job',
-    required: true
+    required: false
   },
-  employer: {
+  company: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
     required: true
@@ -26,6 +26,15 @@ const ratingSchema = new mongoose.Schema({
     type: String,
     default: null
   },
+  isAnonymous: {
+    type: Boolean,
+    default: true
+  },
+  relation: {
+    type: String,
+    enum: ['applicant', 'former_employee'],
+    default: 'applicant'
+  },
   responseReceived: {
     type: Boolean,
     default: false
@@ -37,7 +46,7 @@ const ratingSchema = new mongoose.Schema({
 });
 
 ratingSchema.index({ job: 1 });
-ratingSchema.index({ employer: 1 });
+ratingSchema.index({ company: 1 });
 ratingSchema.index({ applicant: 1 });
 ratingSchema.index({ rating: 1 });
 

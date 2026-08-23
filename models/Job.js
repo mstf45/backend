@@ -55,6 +55,17 @@ const jobSchema = new mongoose.Schema({
     type: Number,
     default: 0
   },
+  durationDays: {
+    type: Number,
+    default: 30
+  },
+  maxApplicants: {
+    type: Number,
+    default: null
+  },
+  expiresAt: {
+    type: Date
+  },
   isActive: {
     type: Boolean,
     default: true
@@ -67,6 +78,13 @@ const jobSchema = new mongoose.Schema({
     type: Date,
     default: Date.now
   }
+});
+
+jobSchema.pre('save', function(next) {
+  if (this.applicants) {
+    this.applicantCount = this.applicants.length;
+  }
+  next();
 });
 
 jobSchema.index({ employer: 1 });

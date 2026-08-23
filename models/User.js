@@ -52,6 +52,30 @@ const userSchema = new mongoose.Schema({
     type: String,
     default: null
   },
+  company: {
+    type: String,
+    default: null
+  },
+  companyLogo: {
+    type: String,
+    default: null
+  },
+  companyEmployeeCount: {
+    type: Number,
+    default: null
+  },
+  companyDescription: {
+    type: String,
+    default: null
+  },
+  companyScore: {
+    type: Number,
+    default: 100
+  },
+  companyRatingCount: {
+    type: Number,
+    default: 0
+  },
   socialLinks: {
     instagram: { type: String, default: null },
     twitter: { type: String, default: null },
@@ -88,6 +112,18 @@ const userSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'
   }],
+  isPrivate: {
+    type: Boolean,
+    default: false
+  },
+  blockedUsers: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  }],
+  showBlockDialogAfterHide: {
+    type: Boolean,
+    default: true
+  },
   createdAt: {
     type: Date,
     default: Date.now
@@ -101,5 +137,6 @@ const userSchema = new mongoose.Schema({
 userSchema.index({ email: 1 });
 userSchema.index({ username: 1 });
 userSchema.index({ userType: 1 });
+userSchema.index({ companyScore: -1 });
 
 export default mongoose.model('User', userSchema);

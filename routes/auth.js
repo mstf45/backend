@@ -4,8 +4,29 @@ import jwt from 'jsonwebtoken';
 import { body, validationResult } from 'express-validator';
 import User from '../models/User.js';
 import { authenticate } from '../middleware/auth.js';
+import { saveBase64Media } from '../utils/base64Upload.js';
 
 const router = express.Router();
+
+// Helper to format avatar and companyLogo URLs
+const formatUserUrls = (req, userObj) => {
+  if (userObj.avatar) {
+    if (userObj.avatar.startsWith('/uploads/')) {
+      userObj.avatar = `${req.protocol}://${req.get('host')}${userObj.avatar}`;
+    }
+  } else {
+    userObj.avatar = `${req.protocol}://${req.get('host')}/uploads/default_avatar.png`;
+  }
+
+  if (userObj.companyLogo) {
+    if (userObj.companyLogo.startsWith('/uploads/')) {
+      userObj.companyLogo = `${req.protocol}://${req.get('host')}${userObj.companyLogo}`;
+    }
+  } else {
+    userObj.companyLogo = `${req.protocol}://${req.get('host')}/uploads/default_avatar.png`;
+  }
+  return userObj;
+};
 
 // Register
 router.post('/register', [
@@ -38,7 +59,8 @@ router.post('/register', [
       email,
       phone,
       password: hashedPassword,
-      userType
+      userType,
+      companyScore: 100
     });
 
     await user.save();
@@ -50,15 +72,13 @@ router.post('/register', [
       { expiresIn: process.env.JWT_EXPIRE || '7d' }
     );
 
+    const userObj = formatUserUrls(req, user.toObject());
+    delete userObj.password;
+
     res.status(201).json({
       message: 'User registered successfully',
       token,
-      user: {
-        id: user._id,
-        username: user.username,
-        email: user.email,
-        userType: user.userType
-      }
+      user: userObj
     });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
@@ -97,17 +117,13 @@ router.post('/login', [
       { expiresIn: process.env.JWT_EXPIRE || '7d' }
     );
 
+    const userObj = formatUserUrls(req, user.toObject());
+    delete userObj.password;
+
     res.json({
       message: 'Login successful',
       token,
-      user: {
-        id: user._id,
-        username: user.username,
-        email: user.email,
-        userType: user.userType,
-        avatar: user.avatar,
-        profession: user.profession
-      }
+      user: userObj
     });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
@@ -118,16 +134,13 @@ router.post('/login', [
 router.get('/me', authenticate, async (req, res) => {
   try {
     const user = await User.findById(req.user._id).select('-password -phoneVerificationCode -phoneVerificationCodeExpires');
-    
-    // Set default avatar if null
-    if (!user.avatar) {
-      user.avatar = `${req.protocol}://${req.get('host')}/uploads/default_avatar.png`;
-    } else if (user.avatar.startsWith('/uploads/')) {
-      user.avatar = `${req.protocol}://${req.get('host')}${user.avatar}`;
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
     }
+
+    const userObj = formatUserUrls(req, user.toObject());
     
     // Ensure socialLinks has all fields with null values if not set
-    const userObj = user.toObject();
     if (!userObj.socialLinks) {
       userObj.socialLinks = {
         instagram: null,
@@ -148,7 +161,6 @@ router.get('/me', authenticate, async (req, res) => {
         github: null,
         medium: null
       };
-      // Replace placeholder values with null
       const placeholderValues = ['instagram_url', 'twitter_url', 'facebook_url', 'linkedin_url', 'youtube_url', 'github_url', 'medium_url'];
       Object.keys(userObj.socialLinks).forEach(key => {
         if (placeholderValues.includes(userObj.socialLinks[key])) {
@@ -167,15 +179,57 @@ router.get('/me', authenticate, async (req, res) => {
 // Update user profile
 router.put('/profile', authenticate, async (req, res) => {
   try {
-    const { avatar, profession, bio, socialLinks, experience, username, phone } = req.body;
+    const { 
+      avatar, 
+      profession, 
+      bio, 
+      socialLinks, 
+      experience, 
+      username, 
+      phone,
+      company,
+      companyLogo,
+      companyEmployeeCount,
+      companyDescription
+    } = req.body;
 
     const user = await User.findById(req.user._id);
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
     
-    if (avatar) user.avatar = avatar;
-    if (profession) user.profession = profession;
-    if (bio) user.bio = bio;
+    if (profession !== undefined) user.profession = profession;
+    if (bio !== undefined) user.bio = bio;
     if (socialLinks) user.socialLinks = { ...user.socialLinks, ...socialLinks };
     if (experience) user.experience = experience;
+    
+    if (company !== undefined) user.company = company;
+    if (companyEmployeeCount !== undefined) user.companyEmployeeCount = companyEmployeeCount;
+    if (companyDescription !== undefined) user.companyDescription = companyDescription;
+    if (req.body.isPrivate !== undefined) {
+      user.isPrivate = req.body.isPrivate === true || req.body.isPrivate === 'true';
+    }
+    if (req.body.showBlockDialogAfterHide !== undefined) {
+      user.showBlockDialogAfterHide = req.body.showBlockDialogAfterHide === true || req.body.showBlockDialogAfterHide === 'true';
+    }
+
+    if (avatar) {
+      if (avatar.startsWith('data:')) {
+        const saved = saveBase64Media(avatar);
+        if (saved) user.avatar = saved.path;
+      } else {
+        user.avatar = avatar;
+      }
+    }
+
+    if (companyLogo) {
+      if (companyLogo.startsWith('data:')) {
+        const saved = saveBase64Media(companyLogo);
+        if (saved) user.companyLogo = saved.path;
+      } else {
+        user.companyLogo = companyLogo;
+      }
+    }
     
     // Update username if provided and not taken
     if (username && username !== user.username) {
@@ -188,7 +242,6 @@ router.put('/profile', authenticate, async (req, res) => {
     
     // Update phone if provided
     if (phone) {
-      // Only reset phone verification if phone number actually changes
       if (phone !== user.phone) {
         user.phone = phone;
         user.isPhoneVerified = false;
@@ -200,15 +253,10 @@ router.put('/profile', authenticate, async (req, res) => {
     user.updatedAt = Date.now();
     await user.save();
 
-    // Convert avatar to full URL if needed
-    const userObj = user.toObject();
-    if (userObj.avatar) {
-      if (userObj.avatar.startsWith('/uploads/')) {
-        userObj.avatar = `${req.protocol}://${req.get('host')}${userObj.avatar}`;
-      }
-    }
+    const userObj = formatUserUrls(req, user.toObject());
+    delete userObj.password;
 
-    // Ensure socialLinks has all fields with null values if not set
+    // Ensure socialLinks has all fields
     if (!userObj.socialLinks) {
       userObj.socialLinks = {
         instagram: null,
@@ -229,7 +277,6 @@ router.put('/profile', authenticate, async (req, res) => {
         github: null,
         medium: null
       };
-      // Replace placeholder values with null
       const placeholderValues = ['instagram_url', 'twitter_url', 'facebook_url', 'linkedin_url', 'youtube_url', 'github_url', 'medium_url'];
       Object.keys(userObj.socialLinks).forEach(key => {
         if (placeholderValues.includes(userObj.socialLinks[key])) {
@@ -254,18 +301,13 @@ router.post('/verify-phone/send', authenticate, async (req, res) => {
       return res.status(400).json({ message: 'Phone already verified' });
     }
 
-    // Generate 6-digit verification code
     const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
-    
-    // Set expiration to 10 minutes from now
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
     
     user.phoneVerificationCode = verificationCode;
     user.phoneVerificationCodeExpires = expiresAt;
     await user.save();
 
-    // In production, you would send this code via SMS
-    // For now, we'll return it in the response for testing
     res.json({ 
       message: 'Verification code sent successfully',
       verificationCode: verificationCode,
@@ -303,7 +345,6 @@ router.post('/verify-phone', authenticate, async (req, res) => {
       return res.status(400).json({ message: 'Invalid verification code' });
     }
 
-    // Verify phone
     user.isPhoneVerified = true;
     user.phoneVerificationCode = null;
     user.phoneVerificationCodeExpires = null;
