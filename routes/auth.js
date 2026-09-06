@@ -5,6 +5,15 @@ import { body, validationResult } from 'express-validator';
 import User from '../models/User.js';
 import { authenticate } from '../middleware/auth.js';
 import { saveBase64Media } from '../utils/base64Upload.js';
+import dotenv from 'dotenv';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+dotenv.config({ path: path.join(__dirname, '../.env') });
+
+const JWT_SECRET = process.env.JWT_SECRET || 'your_jwt_secret_key_here_change_in_production';
 
 const router = express.Router();
 
@@ -68,7 +77,7 @@ router.post('/register', [
     // Generate token
     const token = jwt.sign(
       { userId: user._id },
-      process.env.JWT_SECRET,
+      JWT_SECRET,
       { expiresIn: process.env.JWT_EXPIRE || '7d' }
     );
 
@@ -81,44 +90,55 @@ router.post('/register', [
       user: userObj
     });
   } catch (error) {
+    console.error('Error in POST /api/auth/register:', error);
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 });
 
 // Login
-router.post('/login', [
-  body('email').isEmail().withMessage('Valid email is required'),
-  body('password').notEmpty().withMessage('Password is required')
-], async (req, res) => {
+router.post('/login', async (req, res) => {
   try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
+    const rawIdentifier = req.body.email || req.body.username || req.body.identifier;
+    const password = req.body.password;
+
+    if (!rawIdentifier || !password) {
+      return res.status(400).json({ message: 'E-posta/kullanıcı adı ve şifre gereklidir' });
     }
 
-    const { email, password } = req.body;
+    const identifier = rawIdentifier.toString().trim();
+    console.log(`=== POST /api/auth/login attempt for: "${identifier}" ===`);
 
-    // Find user
-    const user = await User.findOne({ email });
+    // Find user by case-insensitive email or username
+    const user = await User.findOne({
+      $or: [
+        { email: identifier.toLowerCase() },
+        { username: { $regex: new RegExp(`^${identifier.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } }
+      ]
+    });
+
     if (!user) {
+      console.log(`[LOGIN FAILED] User not found for identifier: "${identifier}"`);
       return res.status(401).json({ message: 'Invalid credentials' });
     }
 
     // Check password
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
+      console.log(`[LOGIN FAILED] Incorrect password for user: "${user.email}" (${user.username})`);
       return res.status(401).json({ message: 'Invalid credentials' });
     }
 
     // Generate token
     const token = jwt.sign(
       { userId: user._id },
-      process.env.JWT_SECRET,
+      JWT_SECRET,
       { expiresIn: process.env.JWT_EXPIRE || '7d' }
     );
 
     const userObj = formatUserUrls(req, user.toObject());
     delete userObj.password;
+
+    console.log(`[LOGIN SUCCESS] User: "${user.email}" (${user.username}, ID: ${user._id}) logged in successfully.`);
 
     res.json({
       message: 'Login successful',
@@ -126,6 +146,7 @@ router.post('/login', [
       user: userObj
     });
   } catch (error) {
+    console.error('Error in POST /api/auth/login:', error);
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 });

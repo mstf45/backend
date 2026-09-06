@@ -19,6 +19,10 @@ const postSchema = new mongoose.Schema({
     type: String,
     default: null
   },
+  ai: {
+    type: mongoose.Schema.Types.Mixed,
+    default: false
+  },
   likes: [{
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'
@@ -67,5 +71,6 @@ const postSchema = new mongoose.Schema({
 postSchema.index({ author: 1 });
 postSchema.index({ createdAt: -1 });
 postSchema.index({ mediaType: 1 });
+postSchema.index({ ai: 1 });
 
 export default mongoose.model('Post', postSchema);

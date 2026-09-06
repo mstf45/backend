@@ -1,4 +1,4 @@
-import express from 'express';
+﻿import express from 'express';
 import { body, validationResult } from 'express-validator';
 import Job from '../models/Job.js';
 import User from '../models/User.js';
@@ -32,6 +32,40 @@ const formatEmployerUrls = (req, employer) => {
   return employer;
 };
 
+// Helper to update daily statistics for views, clicks, applications
+const updateJobDailyStats = async (jobId, type) => {
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    const incField = {};
+    incField[type === 'views' ? 'viewCount' : (type === 'clicks' ? 'clickCount' : 'applicantCount')] = 1;
+
+    const pullResult = await Job.updateOne(
+      { _id: jobId, 'dailyStats.date': today },
+      { 
+        $inc: { 
+          ...incField,
+          ['dailyStats.$.' + type]: 1 
+        } 
+      }
+    );
+
+    if (pullResult.matchedCount === 0) {
+      const newStat = { date: today, views: 0, clicks: 0, applications: 0 };
+      newStat[type] = 1;
+      await Job.updateOne(
+        { _id: jobId },
+        {
+          $inc: incField,
+          $push: { dailyStats: newStat }
+        }
+      );
+    }
+  } catch (err) {
+    console.error('updateJobDailyStats error:', err.message);
+  }
+};
+
+
 // Create job posting (employer only)
 router.post('/', authenticate, authorize('employer'), checkReadOnly, [
   body('profession').trim().notEmpty().withMessage('Profession is required'),
@@ -51,7 +85,7 @@ router.post('/', authenticate, authorize('employer'), checkReadOnly, [
 
     const expiresAt = new Date(Date.now() + parseInt(durationDays) * 24 * 60 * 60 * 1000);
 
-    const finalCompany = req.user.company || company || '�irket Belirtilmemi�';
+    const finalCompany = req.user.company || company || 'Şirket Belirtilmemiş';
 
     const job = new Job({
       employer: req.user._id,
@@ -91,6 +125,7 @@ router.get('/', authenticate, async (req, res) => {
     const now = new Date();
     const queryFilter = {
       employer: { $nin: blacklistedIds },
+      hiddenBy: { $ne: req.user._id },
       isActive: true,
       $and: [
         {
@@ -148,7 +183,10 @@ router.get('/', authenticate, async (req, res) => {
       return {
         ...job,
         id: job._id.toString(),
-        isApplied: job.applicants.some(id => id.toString() === req.user._id.toString())
+        isApplied: job.applicants ? job.applicants.some(id => id.toString() === req.user._id.toString()) : false,
+        isFavorite: job.favorites ? job.favorites.some(id => id.toString() === req.user._id.toString()) : false,
+        isSaved: job.savedBy ? job.savedBy.some(id => id.toString() === req.user._id.toString()) : false,
+        isHidden: job.hiddenBy ? job.hiddenBy.some(id => id.toString() === req.user._id.toString()) : false
       };
     });
 
@@ -185,6 +223,8 @@ router.get('/applied', authenticate, async (req, res) => {
         const jobObj = app.job.toObject();
         jobObj.id = jobObj._id.toString();
         jobObj.isApplied = true;
+        jobObj.isFavorite = app.job.favorites ? app.job.favorites.some(id => id.toString() === req.user._id.toString()) : false;
+        jobObj.isSaved = app.job.savedBy ? app.job.savedBy.some(id => id.toString() === req.user._id.toString()) : false;
         
         // Calculate isActive dynamically
         const now = new Date();
@@ -224,6 +264,9 @@ router.get('/employer/:employerId', authenticate, async (req, res) => {
       formatEmployerUrls(req, job.employer);
       const jobObj = job.toObject();
       jobObj.id = jobObj._id.toString();
+      jobObj.isFavorite = job.favorites ? job.favorites.some(id => id.toString() === req.user._id.toString()) : false;
+      jobObj.isSaved = job.savedBy ? job.savedBy.some(id => id.toString() === req.user._id.toString()) : false;
+      jobObj.isApplied = job.applicants ? job.applicants.some(id => id.toString() === req.user._id.toString()) : false;
       
       const now = new Date();
       const isExpired = jobObj.expiresAt && new Date(jobObj.expiresAt) < now;
@@ -241,6 +284,149 @@ router.get('/employer/:employerId', authenticate, async (req, res) => {
         total,
         pages: Math.ceil(total / limit)
       }
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// Favorite / Unfavorite job
+router.post('/:id/favorite', authenticate, async (req, res) => {
+  try {
+    const job = await Job.findById(req.params.id);
+
+    if (!job) {
+      return res.status(404).json({ message: 'Job not found' });
+    }
+
+    if (!job.favorites) {
+      job.favorites = [];
+    }
+
+    const alreadyFavorited = job.favorites.some(id => id.toString() === req.user._id.toString());
+
+    if (alreadyFavorited) {
+      job.favorites = job.favorites.filter(id => id.toString() !== req.user._id.toString());
+      job.favoriteCount = job.favorites.length;
+    } else {
+      job.favorites.push(req.user._id);
+      job.favoriteCount = job.favorites.length;
+    }
+
+    await job.save();
+
+    res.json({
+      message: alreadyFavorited ? 'İlan favorilerden çıkarıldı' : 'İlan favorilere eklendi',
+      isFavorite: !alreadyFavorited,
+      favoriteCount: job.favoriteCount
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// Save / Unsave job
+router.post('/:id/save', authenticate, async (req, res) => {
+  try {
+    const job = await Job.findById(req.params.id);
+
+    if (!job) {
+      return res.status(404).json({ message: 'Job not found' });
+    }
+
+    if (!job.savedBy) {
+      job.savedBy = [];
+    }
+
+    const alreadySaved = job.savedBy.some(id => id.toString() === req.user._id.toString());
+
+    if (alreadySaved) {
+      job.savedBy = job.savedBy.filter(id => id.toString() !== req.user._id.toString());
+      job.savedCount = job.savedBy.length;
+    } else {
+      job.savedBy.push(req.user._id);
+      job.savedCount = job.savedBy.length;
+    }
+
+    await job.save();
+
+    res.json({
+      message: alreadySaved ? 'İlan kaydedilenlerden çıkarıldı' : 'İlan kaydedildi',
+      isSaved: !alreadySaved,
+      savedCount: job.savedCount
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// Hide job (Önerme / Gizle)
+router.post('/:id/hide', authenticate, async (req, res) => {
+  try {
+    const job = await Job.findById(req.params.id);
+
+    if (!job) {
+      return res.status(404).json({ message: 'Job not found' });
+    }
+
+    if (!job.hiddenBy) {
+      job.hiddenBy = [];
+    }
+
+    const alreadyHidden = job.hiddenBy.some(id => id.toString() === req.user._id.toString());
+
+    if (!alreadyHidden) {
+      job.hiddenBy.push(req.user._id);
+      job.hiddenCount = job.hiddenBy.length;
+      await job.save();
+    }
+
+    res.json({
+      message: 'İlan gizlendi',
+      isHidden: true,
+      hiddenCount: job.hiddenCount
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// Report job (İlanı Bildir)
+router.post('/:id/report', authenticate, async (req, res) => {
+  try {
+    const job = await Job.findById(req.params.id);
+
+    if (!job) {
+      return res.status(404).json({ message: 'Job not found' });
+    }
+
+    const { reason, description } = req.body;
+
+    if (!job.reports) {
+      job.reports = [];
+    }
+
+    job.reports.push({
+      user: req.user._id,
+      reason: reason || 'Diğer',
+      description: description || '',
+      createdAt: new Date()
+    });
+
+    // Also hide the job for the reporting user
+    if (!job.hiddenBy) {
+      job.hiddenBy = [];
+    }
+    if (!job.hiddenBy.some(id => id.toString() === req.user._id.toString())) {
+      job.hiddenBy.push(req.user._id);
+      job.hiddenCount = job.hiddenBy.length;
+    }
+
+    await job.save();
+
+    res.json({
+      message: 'İlan bildirildi ve incelemeye alındı',
+      reported: true
     });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
@@ -270,7 +456,7 @@ router.get('/:id', authenticate, async (req, res) => {
     if (isBlacklisted) {
       blacklistInfo = {
         isBlacklisted: true,
-        reason: isBlacklisted.reason || "CV'ye Geri D�n�� Yapm�yorlar ve Cv Topluyorlar"
+        reason: isBlacklisted.reason || "CV'ye Geri Dönüş Yapmıyorlar ve Cv Topluyorlar"
       };
     }
 
@@ -292,7 +478,7 @@ router.get('/:id', authenticate, async (req, res) => {
           relation: r.relation,
           isAnonymous: r.isAnonymous,
           createdAt: r.createdAt,
-          applicantName: r.isAnonymous ? 'Gizli Kullan�c�' : (r.applicant?.username || 'Kullan�c�'),
+          applicantName: r.isAnonymous ? 'Gizli Kullanıcı' : (r.applicant?.username || 'Kullanıcı'),
           applicantAvatar: r.isAnonymous ? null : (r.applicant?.avatar ? (r.applicant.avatar.startsWith('/uploads/') ? `${req.protocol}://${req.get('host')}${r.applicant.avatar}` : r.applicant.avatar) : null)
         }))
       };
@@ -308,7 +494,10 @@ router.get('/:id', authenticate, async (req, res) => {
 
     const jobWithFlag = {
       ...jobObj,
-      isApplied: job.applicants.some(id => id.toString() === req.user._id.toString())
+      isApplied: job.applicants ? job.applicants.some(id => id.toString() === req.user._id.toString()) : false,
+      isFavorite: job.favorites ? job.favorites.some(id => id.toString() === req.user._id.toString()) : false,
+      isSaved: job.savedBy ? job.savedBy.some(id => id.toString() === req.user._id.toString()) : false,
+      isHidden: job.hiddenBy ? job.hiddenBy.some(id => id.toString() === req.user._id.toString()) : false
     };
 
     const application = await Application.findOne({
@@ -400,17 +589,21 @@ router.post('/:id/apply', authenticate, async (req, res) => {
     // Check if expired
     const now = new Date();
     if (job.expiresAt && now > job.expiresAt) {
-      return res.status(400).json({ message: 'Bu i� ilan�n�n s�resi dolmu�tur.' });
+      return res.status(400).json({ message: 'Bu iş ilanının süresi dolmuştur.' });
     }
 
     // Check if limit reached
     if (job.maxApplicants && job.applicantCount >= job.maxApplicants) {
-      return res.status(400).json({ message: 'Bu i� ilan� i�in ba�vuru s�n�r�na ula��lm��t�r.' });
+      return res.status(400).json({ message: 'Bu iş ilanı için başvuru sınırına ulaşılmıştır.' });
     }
 
     // Check if already applied
-    if (job.applicants.includes(req.user._id)) {
+    if (job.applicants && job.applicants.includes(req.user._id)) {
       return res.status(400).json({ message: 'Already applied to this job' });
+    }
+
+    if (!job.applicants) {
+      job.applicants = [];
     }
 
     job.applicants.push(req.user._id);
@@ -422,8 +615,8 @@ router.post('/:id/apply', authenticate, async (req, res) => {
 
       const notification = new Notification({
         user: job.employer,
-        title: 'Ba�vuru S�n�r�na Ula��ld�',
-        message: `"${job.title}" adl� i� ilan�n�z maksimum ba�vuru s�n�r�na (${job.maxApplicants} ki�i) ula�t��� i�in kapat�lm��t�r.`,
+        title: 'Başvuru Sınırına Ulaşıldı',
+        message: `"${job.title}" adlı iş ilanınız maksimum başvuru sınırına (${job.maxApplicants} kişi) ulaştığı için kapatılmıştır.`,
         type: 'warning'
       });
       await notification.save();
@@ -440,14 +633,13 @@ router.post('/:id/apply', authenticate, async (req, res) => {
       appliedAt: new Date()
     });
     await application.save();
+    await updateJobDailyStats(job._id, 'applications');
 
     res.json({ message: 'Applied successfully' });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 });
-
-
 
 // Get job applicants (employer only)
 router.get('/:id/applicants', authenticate, authorize('employer'), async (req, res) => {
@@ -507,6 +699,132 @@ router.post('/:id/republish', authenticate, authorize('employer'), checkReadOnly
     formatEmployerUrls(req, job.employer);
 
     res.json({ message: 'Job republished successfully', job });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+
+// ==================== JOB ANALYTICS & STATS ====================
+
+// Record job view (impression)
+router.post('/:id/view', authenticate, async (req, res) => {
+  try {
+    const job = await Job.findById(req.params.id);
+    if (!job) return res.status(404).json({ message: 'Job not found' });
+
+    if (job.employer.toString() !== req.user._id.toString()) {
+      await updateJobDailyStats(job._id, 'views');
+    }
+    res.json({ message: 'View recorded' });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// Record job click / read
+router.post('/:id/click', authenticate, async (req, res) => {
+  try {
+    const job = await Job.findById(req.params.id);
+    if (!job) return res.status(404).json({ message: 'Job not found' });
+
+    if (job.employer.toString() !== req.user._id.toString()) {
+      await updateJobDailyStats(job._id, 'clicks');
+    }
+    res.json({ message: 'Click recorded' });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// Get job analytics (employer only)
+router.get('/:id/analytics', authenticate, authorize('employer'), async (req, res) => {
+  try {
+    const job = await Job.findById(req.params.id);
+
+    if (!job) {
+      return res.status(404).json({ message: 'Job not found' });
+    }
+
+    if (job.employer.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ message: 'Not authorized to view analytics for this job' });
+    }
+
+    const viewCount = job.viewCount || 0;
+    const clickCount = job.clickCount || 0;
+    const applicantCount = job.applicantCount || (job.applicants ? job.applicants.length : 0);
+    const favoriteCount = job.favoriteCount || (job.favorites ? job.favorites.length : 0);
+    const savedCount = job.savedCount || (job.savedBy ? job.savedBy.length : 0);
+
+    // Rates
+    const clickThroughRate = viewCount > 0 ? ((clickCount / viewCount) * 100).toFixed(1) : (clickCount > 0 ? '100.0' : '0.0');
+    const applicationRate = clickCount > 0 ? ((applicantCount / clickCount) * 100).toFixed(1) : (applicantCount > 0 ? '100.0' : '0.0');
+
+    // Funnel data
+    const funnel = [
+      { key: 'views', label: 'Görüntülenme', count: viewCount, color: '#3B82F6', description: 'İlanı listede veya aramada görenler' },
+      { key: 'clicks', label: 'Tıklanma & Okunma', count: clickCount, color: '#8B5CF6', description: 'İlan detayını açıp okuyanlar' },
+      { key: 'applications', label: 'Başvuru', count: applicantCount, color: '#10B981', description: 'İş başvurusunda bulunan adaylar' },
+      { key: 'interactions', label: 'Favori & Kayıt', count: favoriteCount + savedCount, color: '#F59E0B', description: 'İlanı kaydeden veya favorileyenler' }
+    ];
+
+    // Last 7 days breakdown
+    const now = new Date();
+    const dayNames = ['Paz', 'Pzt', 'Sal', 'Çar', 'Per', 'Cum', 'Cmt'];
+    const dailyActivity = [];
+
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(now.getTime() - i * 24 * 60 * 60 * 1000);
+      const dateStr = d.toISOString().slice(0, 10);
+      const dayName = dayNames[d.getDay()];
+
+      const found = (job.dailyStats || []).find(s => s.date === dateStr);
+      dailyActivity.push({
+        date: dateStr,
+        dayName,
+        views: found ? found.views : 0,
+        clicks: found ? found.clicks : 0,
+        applications: found ? found.applications : 0
+      });
+    }
+
+    // Status breakdown from Application collection
+    const applications = await Application.find({ job: job._id });
+    const statusCounts = {
+      applied: 0,
+      contacted: 0,
+      accepted: 0,
+      rejected: 0
+    };
+
+    applications.forEach(app => {
+      if (statusCounts[app.status] !== undefined) {
+        statusCounts[app.status]++;
+      } else {
+        statusCounts.applied++;
+      }
+    });
+
+    res.json({
+      success: true,
+      analytics: {
+        jobId: job._id.toString(),
+        title: job.title,
+        company: job.company,
+        createdAt: job.createdAt,
+        isActive: job.isActive,
+        viewCount,
+        clickCount,
+        applicantCount,
+        favoriteCount,
+        savedCount,
+        clickThroughRate: parseFloat(clickThroughRate),
+        applicationRate: parseFloat(applicationRate),
+        funnel,
+        dailyActivity,
+        applicantStatusBreakdown: statusCounts
+      }
+    });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
   }

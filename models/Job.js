@@ -43,6 +43,62 @@ const jobSchema = new mongoose.Schema({
     type: Number,
     default: 0
   },
+  viewCount: {
+    type: Number,
+    default: 0
+  },
+  clickCount: {
+    type: Number,
+    default: 0
+  },
+  dailyStats: [{
+    date: { type: String, required: true },
+    views: { type: Number, default: 0 },
+    clicks: { type: Number, default: 0 },
+    applications: { type: Number, default: 0 }
+  }],
+  favorites: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  }],
+  favoriteCount: {
+    type: Number,
+    default: 0
+  },
+  savedBy: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  }],
+  savedCount: {
+    type: Number,
+    default: 0
+  },
+  hiddenBy: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  }],
+  hiddenCount: {
+    type: Number,
+    default: 0
+  },
+  reports: [{
+    user: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User'
+    },
+    reason: {
+      type: String,
+      default: 'Diğer'
+    },
+    description: {
+      type: String,
+      default: ''
+    },
+    createdAt: {
+      type: Date,
+      default: Date.now
+    }
+  }],
   ratings: [{
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Rating'
@@ -84,6 +140,15 @@ jobSchema.pre('save', function(next) {
   if (this.applicants) {
     this.applicantCount = this.applicants.length;
   }
+  if (this.favorites) {
+    this.favoriteCount = this.favorites.length;
+  }
+  if (this.savedBy) {
+    this.savedCount = this.savedBy.length;
+  }
+  if (this.hiddenBy) {
+    this.hiddenCount = this.hiddenBy.length;
+  }
   next();
 });
 
@@ -92,5 +157,8 @@ jobSchema.index({ profession: 1 });
 jobSchema.index({ workType: 1 });
 jobSchema.index({ location: 1 });
 jobSchema.index({ createdAt: -1 });
+jobSchema.index({ favorites: 1 });
+jobSchema.index({ savedBy: 1 });
+jobSchema.index({ hiddenBy: 1 });
 
 export default mongoose.model('Job', jobSchema);

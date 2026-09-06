@@ -98,7 +98,8 @@ const saveBase64Media = (base64String) => {
 // Create post
 router.post('/', authenticate, checkReadOnly, [
   body('content').trim().notEmpty().withMessage('Content is required'),
-  body('media').optional()
+  body('media').optional(),
+  body('ai').optional()
 ], async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -106,7 +107,7 @@ router.post('/', authenticate, checkReadOnly, [
       return res.status(400).json({ errors: errors.array() });
     }
 
-    const { content, media } = req.body;
+    const { content, media, ai } = req.body;
 
     console.log('Media received:', media ? 'YES' : 'NO');
     if (media) {
@@ -141,11 +142,28 @@ router.post('/', authenticate, checkReadOnly, [
       }
     }
 
+    let aiValue = null;
+    if (ai !== undefined && ai !== null) {
+      if (typeof ai === 'string') {
+        const trimmed = ai.trim();
+        if (trimmed === 'false' || trimmed === 'null' || trimmed === '') {
+          aiValue = null;
+        } else {
+          aiValue = trimmed;
+        }
+      } else if (typeof ai === 'boolean') {
+        aiValue = ai ? true : null;
+      } else {
+        aiValue = ai;
+      }
+    }
+
     const post = new Post({
       author: req.user._id,
       content: content || '',
       mediaType,
-      mediaUrl
+      mediaUrl,
+      ai: aiValue
     });
 
     await post.save();
@@ -214,6 +232,7 @@ router.get('/', authenticate, async (req, res) => {
 
         return {
           ...postObj,
+          ai: postObj.ai !== undefined ? postObj.ai : null,
           isLiked: post.likes ? post.likes.includes(req.user._id) : false,
           isSaved: post.savedBy ? post.savedBy.includes(req.user._id) : false,
           isHidden: post.hiddenBy ? post.hiddenBy.includes(req.user._id) : false
@@ -349,16 +368,60 @@ router.get('/videos', authenticate, async (req, res) => {
     const limit = parseInt(req.query.limit) || 20;
     const skip = (page - 1) * limit;
 
-    const posts = await Post.find({ mediaType: 'video' })
+    const user = await User.findById(req.user._id);
+    const blockedIds = user ? (user.blockedUsers || []) : [];
+
+    const query = {
+      mediaType: 'video',
+      mediaUrl: { $ne: null, $exists: true },
+      hiddenBy: { $ne: req.user._id },
+      author: { $nin: blockedIds }
+    };
+
+    const posts = await Post.find(query)
       .populate('author', 'username avatar profession')
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit);
 
-    const total = await Post.countDocuments({ mediaType: 'video' });
+    const total = await Post.countDocuments(query);
+
+    const postsWithFlags = posts.map(post => {
+      try {
+        const postObj = post.toObject();
+
+        if (!postObj.author) {
+          postObj.author = { username: 'Unknown', avatar: null, profession: null };
+        }
+
+        if (!postObj.author.avatar) {
+          postObj.author.avatar = getFullUrl(req, '/uploads/default_avatar.png');
+        } else {
+          postObj.author.avatar = getFullUrl(req, postObj.author.avatar);
+        }
+
+        if (postObj.mediaUrl && postObj.mediaUrl.startsWith('/uploads/')) {
+          postObj.mediaUrl = getFullUrl(req, postObj.mediaUrl);
+        }
+
+        return {
+          ...postObj,
+          ai: postObj.ai !== undefined ? postObj.ai : null,
+          isLiked: post.likes ? post.likes.includes(req.user._id) : false,
+          isSaved: post.savedBy ? post.savedBy.includes(req.user._id) : false,
+          isHidden: post.hiddenBy ? post.hiddenBy.includes(req.user._id) : false,
+          likeCount: post.likes ? post.likes.length : 0,
+          savedCount: post.savedBy ? post.savedBy.length : 0,
+          commentCount: post.comments ? post.comments.length : 0
+        };
+      } catch (err) {
+        console.error('Error processing video post:', err);
+        return null;
+      }
+    }).filter(p => p !== null);
 
     res.json({
-      posts,
+      posts: postsWithFlags,
       pagination: {
         page,
         limit,
@@ -448,13 +511,18 @@ router.put('/:id', authenticate, checkReadOnly, async (req, res) => {
       return res.status(403).json({ message: 'Not authorized to update this post' });
     }
 
-    const { content, media } = req.body;
+    const { content, media, ai } = req.body;
 
     console.log('Update post request - content:', content);
     console.log('Update post request - media exists:', !!media);
     console.log('Update post request - media length:', media ? media.length : 0);
 
     if (content) post.content = content;
+    if (ai !== undefined) {
+      if (ai === true || ai === 'true' || ai === 1 || ai === '1') post.ai = true;
+      else if (ai === false || ai === 'false' || ai === 0 || ai === '0') post.ai = false;
+      else post.ai = ai;
+    }
 
     // Handle media update - save to disk file
     if (media) {

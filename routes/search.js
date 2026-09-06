@@ -1,4 +1,4 @@
-import express from 'express';
+﻿import express from 'express';
 import Job from '../models/Job.js';
 import Post from '../models/Post.js';
 import User from '../models/User.js';
@@ -7,6 +7,28 @@ import { authenticate } from '../middleware/auth.js';
 import { professions } from '../config/professions.js';
 
 const router = express.Router();
+
+// Helper to format avatar and companyLogo for populate
+const formatEmployerUrls = (req, employer) => {
+  if (employer) {
+    if (employer.avatar) {
+      if (employer.avatar.startsWith('/uploads/')) {
+        employer.avatar = `${req.protocol}://${req.get('host')}${employer.avatar}`;
+      }
+    } else {
+      employer.avatar = `${req.protocol}://${req.get('host')}/uploads/default_avatar.png`;
+    }
+
+    if (employer.companyLogo) {
+      if (employer.companyLogo.startsWith('/uploads/')) {
+        employer.companyLogo = `${req.protocol}://${req.get('host')}${employer.companyLogo}`;
+      }
+    } else {
+      employer.companyLogo = `${req.protocol}://${req.get('host')}/uploads/default_avatar.png`;
+    }
+  }
+  return employer;
+};
 
 // Search jobs with filters
 router.get('/jobs', authenticate, async (req, res) => {
@@ -31,6 +53,7 @@ router.get('/jobs', authenticate, async (req, res) => {
     const blacklistedCompanies = await Blacklist.find({ user: req.user._id }).select('company');
     const blacklistedIds = blacklistedCompanies.map(b => b.company);
     query.employer = { $nin: blacklistedIds };
+    query.hiddenBy = { $ne: req.user._id };
 
     if (profession) {
       query.profession = { $regex: profession, $options: 'i' };
@@ -58,15 +81,26 @@ router.get('/jobs', authenticate, async (req, res) => {
     }
 
     const jobs = await Job.find(query)
-      .populate('employer', 'username avatar company')
+      .populate('employer', 'username avatar company companyLogo companyScore')
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(parseInt(limit));
 
     const total = await Job.countDocuments(query);
 
+    const jobsWithFlags = jobs.map(job => {
+      formatEmployerUrls(req, job.employer);
+      const jobObj = job.toObject();
+      jobObj.id = jobObj._id.toString();
+      jobObj.isApplied = job.applicants ? job.applicants.some(id => id.toString() === req.user._id.toString()) : false;
+      jobObj.isFavorite = job.favorites ? job.favorites.some(id => id.toString() === req.user._id.toString()) : false;
+      jobObj.isSaved = job.savedBy ? job.savedBy.some(id => id.toString() === req.user._id.toString()) : false;
+      jobObj.isHidden = job.hiddenBy ? job.hiddenBy.some(id => id.toString() === req.user._id.toString()) : false;
+      return jobObj;
+    });
+
     res.json({
-      jobs,
+      jobs: jobsWithFlags,
       pagination: {
         page: parseInt(page),
         limit: parseInt(limit),

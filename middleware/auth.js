@@ -1,5 +1,14 @@
-import jwt from 'jsonwebtoken';
+ï»¿import jwt from 'jsonwebtoken';
 import User from '../models/User.js';
+import dotenv from 'dotenv';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+dotenv.config({ path: path.join(__dirname, '../.env') });
+
+const JWT_SECRET = process.env.JWT_SECRET || 'your_jwt_secret_key_here_change_in_production';
 
 export const authenticate = async (req, res, next) => {
   try {
@@ -10,7 +19,8 @@ export const authenticate = async (req, res, next) => {
       return res.status(401).json({ message: 'Authentication required' });
     }
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const secret = process.env.JWT_SECRET || JWT_SECRET || 'your_jwt_secret_key_here_change_in_production';
+    const decoded = jwt.verify(token, secret);
     const user = await User.findById(decoded.userId).select('-password');
 
     if (!user) {
@@ -37,7 +47,7 @@ export const authorize = (...userTypes) => {
 export const checkReadOnly = (req, res, next) => {
   if (req.user && req.user.userType === 'employer' && req.user.companyScore <= 30) {
     return res.status(403).json({
-      message: 'Hesabýnýzýn puaný %30 veya altýnda olduðu için bu iþlem engellenmiþtir (Sadece Okunabilir Mod).'
+      message: 'HesabÄ±nÄ±zÄ±n puanÄ± %30 veya altÄ±nda olduÄŸu iÃ§in bu iÅŸlem engellenmiÅŸtir (Sadece Okunabilir Mod).'
     });
   }
   next();
