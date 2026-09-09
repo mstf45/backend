@@ -1,3 +1,4 @@
+import { sendNotification } from '../services/notificationService.js';
 ﻿import express from 'express';
 import { body, validationResult } from 'express-validator';
 import Job from '../models/Job.js';
@@ -635,6 +636,19 @@ router.post('/:id/apply', authenticate, async (req, res) => {
     await application.save();
     await updateJobDailyStats(job._id, 'applications');
 
+    // İş verene anında push bildirim gönder
+    sendNotification({
+      recipientId: job.employer,
+      senderId: req.user._id,
+      title: 'Yeni İş Başvurusu 💼',
+      message: `${req.user.username || 'Bir aday'}, "${job.title}" ilanınıza başvurdu.`,
+      type: 'job_application',
+      data: {
+        jobId: job._id.toString(),
+        applicantId: req.user._id.toString()
+      }
+    }).catch(err => console.warn('[JobApply] Bildirim hatası:', err.message));
+
     res.json({ message: 'Applied successfully' });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
@@ -825,6 +839,52 @@ router.get('/:id/analytics', authenticate, authorize('employer'), async (req, re
         applicantStatusBreakdown: statusCounts
       }
     });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+
+// İş veren adayın CV'sini incelediğinde tetiklenir ve adaya bildirim gönderir
+router.post('/:id/applicants/:applicantId/view-cv', authenticate, authorize('employer'), async (req, res) => {
+  try {
+    const job = await Job.findById(req.params.id);
+    if (!job) return res.status(404).json({ message: 'İlan bulunamadı.' });
+    if (job.employer.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ message: 'Bu ilanın adaylarını inceleme yetkiniz yok.' });
+    }
+
+    const applicant = await User.findById(req.params.applicantId);
+    if (!applicant) return res.status(404).json({ message: 'Aday bulunamadı.' });
+
+    // Başvuru durumunu inceleme olarak güncelle
+    const application = await Application.findOne({
+      job: job._id,
+      applicant: applicant._id
+    });
+    if (application && application.status === 'applied') {
+      application.status = 'reviewed';
+      application.reviewedAt = Date.now();
+      await application.save();
+    }
+
+    const companyName = req.user.company || req.user.username || 'İşveren';
+
+    // Adaya anında bildirim gönder!
+    await sendNotification({
+      recipientId: applicant._id,
+      senderId: req.user._id,
+      title: 'CV\'niz İncelendi 📄',
+      message: `${companyName} "${job.title}" başvurunuzdaki CV\'nizi inceledi.`,
+      type: 'cv_reviewed',
+      data: {
+        jobId: job._id.toString(),
+        employerId: req.user._id.toString(),
+        companyName
+      }
+    });
+
+    res.json({ success: true, message: 'CV inceleme kaydedildi ve adaya bildirim gönderildi.' });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
   }

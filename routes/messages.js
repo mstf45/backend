@@ -1,3 +1,4 @@
+import { sendNotification } from '../services/notificationService.js';
 import express from 'express';
 import Message from '../models/Message.js';
 import User from '../models/User.js';
@@ -27,6 +28,20 @@ router.post('/', authenticate, checkReadOnly, async (req, res) => {
     });
 
     await message.save();
+
+    // Alıcıya anlık push bildirim gönder
+    sendNotification({
+      recipientId: receiverId,
+      senderId: req.user._id,
+      title: req.user.username || 'Yeni Mesaj',
+      message: content.trim().length > 65 ? content.trim().slice(0, 65) + '...' : content.trim(),
+      type: 'chat_message',
+      data: {
+        chatId: message._id.toString(),
+        senderId: req.user._id.toString(),
+        senderName: req.user.username || 'Kullanıcı'
+      }
+    }).catch(err => console.warn('[ChatMessage] Bildirim hatası:', err.message));
 
     // Automatically resolve pending application response if applicable
     if (req.user.userType === 'employer') {

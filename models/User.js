@@ -1,4 +1,4 @@
-import mongoose from 'mongoose';
+﻿import mongoose from 'mongoose';
 
 const userSchema = new mongoose.Schema({
   username: {
@@ -68,6 +68,10 @@ const userSchema = new mongoose.Schema({
     type: String,
     default: null
   },
+  companyLocation: {
+    type: String,
+    default: null
+  },
   companyScore: {
     type: Number,
     default: 100
@@ -124,6 +128,21 @@ const userSchema = new mongoose.Schema({
     type: Boolean,
     default: true
   },
+  certificates: [{
+    certificateId: String,
+    title: String,
+    targetRole: String,
+    issuedAt: { type: Date, default: Date.now },
+    verificationCode: String,
+    score: Number
+  }],
+  badges: [{
+    id: String,
+    title: String,
+    icon: String,
+    description: String,
+    earnedAt: { type: Date, default: Date.now }
+  }],
   createdAt: {
     type: Date,
     default: Date.now
@@ -140,3 +159,4 @@ userSchema.index({ userType: 1 });
 userSchema.index({ companyScore: -1 });
 
 export default mongoose.model('User', userSchema);
+

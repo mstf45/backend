@@ -1,4 +1,4 @@
-import express from 'express';
+﻿import express from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { body, validationResult } from 'express-validator';
@@ -211,7 +211,8 @@ router.put('/profile', authenticate, async (req, res) => {
       company,
       companyLogo,
       companyEmployeeCount,
-      companyDescription
+      companyDescription,
+      companyLocation
     } = req.body;
 
     const user = await User.findById(req.user._id);
@@ -227,6 +228,7 @@ router.put('/profile', authenticate, async (req, res) => {
     if (company !== undefined) user.company = company;
     if (companyEmployeeCount !== undefined) user.companyEmployeeCount = companyEmployeeCount;
     if (companyDescription !== undefined) user.companyDescription = companyDescription;
+    if (companyLocation !== undefined) user.companyLocation = companyLocation;
     if (req.body.isPrivate !== undefined) {
       user.isPrivate = req.body.isPrivate === true || req.body.isPrivate === 'true';
     }
@@ -378,3 +380,4 @@ router.post('/verify-phone', authenticate, async (req, res) => {
 });
 
 export default router;
+

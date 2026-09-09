@@ -1,3 +1,4 @@
+import { sendNotification } from '../services/notificationService.js';
 import express from 'express';
 import { body, validationResult } from 'express-validator';
 import Post from '../models/Post.js';
@@ -605,6 +606,18 @@ router.post('/:id/like', authenticate, checkReadOnly, async (req, res) => {
 
     await post.save();
 
+    // Gönderi sahibi farklı bir kullanıcı ise bildirim gönder
+    if (!alreadyLiked && post.user && post.user.toString() !== req.user._id.toString()) {
+      sendNotification({
+        recipientId: post.user,
+        senderId: req.user._id,
+        title: 'Yeni Beğeni ❤️',
+        message: `${req.user.username || 'Bir kullanıcı'} gönderinizi beğendi.`,
+        type: 'post_like',
+        data: { postId: post._id.toString() }
+      }).catch(err => console.warn('[PostLike] Bildirim hatası:', err.message));
+    }
+
     res.json({
       message: alreadyLiked ? 'Post unliked' : 'Post liked',
       liked: !alreadyLiked,
@@ -724,6 +737,20 @@ router.post('/:id/comments', authenticate, checkReadOnly, async (req, res) => {
 
     await post.save();
     await post.populate('comments.user', 'username avatar');
+
+    // Gönderi sahibi farklı bir kullanıcı ise bildirim gönder
+    if (post.user && post.user.toString() !== req.user._id.toString()) {
+      const commentSnippet = (text || '').trim();
+      const snippet = commentSnippet.length > 50 ? commentSnippet.slice(0, 50) + '...' : commentSnippet;
+      sendNotification({
+        recipientId: post.user,
+        senderId: req.user._id,
+        title: 'Yeni Yorum 💬',
+        message: `${req.user.username || 'Bir kullanıcı'} gönderinize yorum yaptı: "${snippet}"`,
+        type: 'post_comment',
+        data: { postId: post._id.toString() }
+      }).catch(err => console.warn('[PostComment] Bildirim hatası:', err.message));
+    }
 
     res.json({ message: 'Comment added successfully', comments: post.comments });
   } catch (error) {

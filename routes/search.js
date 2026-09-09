@@ -5,6 +5,7 @@ import User from '../models/User.js';
 import Blacklist from '../models/Blacklist.js';
 import { authenticate } from '../middleware/auth.js';
 import { professions } from '../config/professions.js';
+import { cities } from '../config/cities.js';
 
 const router = express.Router();
 
@@ -205,4 +206,14 @@ router.get('/locations', authenticate, async (req, res) => {
   }
 });
 
+// Get cities list (81 provinces of Turkey)
+router.get('/cities', authenticate, async (req, res) => {
+  try {
+    res.json({ cities });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
 export default router;
+
