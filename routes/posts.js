@@ -45,7 +45,8 @@ const saveBase64Media = (base64String) => {
       return null;
     }
 
-    const type = base64String.substring(prefix.length, prefixEnd);
+    const rawType = base64String.substring(prefix.length, prefixEnd);
+    const type = rawType.split(';')[0].trim().toLowerCase();
     const data = base64String.substring(prefixEnd + base64Prefix.length);
 
     console.log('Type:', type);
@@ -57,9 +58,13 @@ const saveBase64Media = (base64String) => {
     // Determine file extension
     let extension = '';
     if (type.startsWith('image/')) {
-      extension = type.replace('image/', '');
+      extension = type.replace('image/', '').trim();
+      if (extension === 'jpeg') extension = 'jpg';
+      if (!extension || extension === '*') extension = 'jpg';
     } else if (type.startsWith('video/')) {
-      extension = type.replace('video/', '');
+      extension = type.replace('video/', '').trim();
+      if (extension === 'quicktime') extension = 'mov';
+      if (!extension || extension === '*') extension = 'mp4';
     } else {
       console.log('Unknown type:', type);
       return null;
@@ -98,7 +103,14 @@ const saveBase64Media = (base64String) => {
 
 // Create post
 router.post('/', authenticate, checkReadOnly, [
-  body('content').trim().notEmpty().withMessage('Content is required'),
+  body('content').custom((value, { req }) => {
+    const hasContent = typeof value === 'string' && value.trim().length > 0;
+    const hasMedia = req.body && req.body.media && typeof req.body.media === 'string' && req.body.media.length > 0;
+    if (!hasContent && !hasMedia) {
+      throw new Error('Gönderi içeriği veya medya eklemelisiniz.');
+    }
+    return true;
+  }),
   body('media').optional(),
   body('ai').optional()
 ], async (req, res) => {

@@ -80,8 +80,8 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'Origin'],
   credentials: true
 }));
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+app.use(express.json({ limit: '250mb' }));
+app.use(express.urlencoded({ extended: true, limit: '250mb' }));
 
 // Serve static files for uploads
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
@@ -132,6 +132,12 @@ app.get('/api/health', (req, res) => {
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error(err.stack);
+  if (err.type === 'entity.too.large' || err.status === 413) {
+    return res.status(413).json({
+      message: 'Yüklemeye çalıştığınız medya dosyası çok büyük (maksimum limit aşıldı). Lütfen daha kısa veya sıkıştırılmış bir video seçin.',
+      error: 'Payload Too Large'
+    });
+  }
   res.status(err.status || 500).json({
     message: err.message || 'Internal Server Error',
     error: process.env.NODE_ENV === 'development' ? err : {}
